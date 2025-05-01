@@ -1,0 +1,5 @@
+address_id(N)(P),Students_student_id(N),address(T)
+101,1,123 Maple Street
+102,2,456 Oak Avenue
+103,3,789 Pine Road
+104,5,321 Birch Boulevard

@@ -1,0 +1,8 @@
+Compile:-
+nvcc main.cu DB.cu Table.cpp -o main -I/home/mustafa-tarek/Desktop/PC/duckdb/src/include -L/home/mustafa-tarek/Desktop/PC/duckdb/build/release/src -lduckdb -std=c++17
+
+Adding Library Path:-
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/mustafa-tarek/Desktop/PC/duckdb/build/release/src
+
+Run:-
+./main
