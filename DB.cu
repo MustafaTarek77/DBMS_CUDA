@@ -28,7 +28,7 @@ DuckDBManager::DuckDBManager(const std::string &csv_directory)
     : csv_directory(csv_directory), db(std::make_unique<DuckDB>(nullptr)), con(std::make_unique<Connection>(*db)) {}
 
 void DuckDBManager::InitializeDatabase() {
-    con->Query("SET disabled_optimizers = 'filter_pushdown,statistics_propagation';");
+    con->Query("SET disabled_optimizers = 'statistics_propagation';");
     // Collect all table names
     for (const auto &entry : fs::directory_iterator(csv_directory)) {
         if (entry.path().extension() == ".csv") {
@@ -197,11 +197,11 @@ void DuckDBManager::TraversePlan(PhysicalOperator *op) {
                     std::cout << std::endl;
                 }
             }
-            Table new_table(table_name, target_columns);
-            last_table_scanned_h.table_name = table_name;
-            last_table_scanned_h.columns_projections = target_columns;
-            last_table_scanned_h.data = new_table.getData();
-            std::cout<<"Table is scanned successfully"<<std::endl;
+            // Table new_table(table_name, target_columns);
+            // last_table_scanned_h.table_name = table_name;
+            // last_table_scanned_h.columns_projections = target_columns;
+            // last_table_scanned_h.data = new_table.getData();
+            // std::cout<<"Table is scanned successfully"<<std::endl;
             break;
         }
         case PhysicalOperatorType::FILTER: {

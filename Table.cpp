@@ -6,17 +6,18 @@
 #include <cstring>
 #include "Table.hpp"
 #include "duckdb.hpp"
+
 namespace fs = std::filesystem;
 
-Table::Table(const std::string &table_name, const std::vector<std::string>& projections) {
+Table::Table(const std::string &table_name, const std::vector<std::string>& projections, const std::vector<std::string>& conditions) {
     this->table_name = table_name;
-    if(makeTableBatches(projections))
+    if(makeTableBatches(projections, conditions))
         std::cout<<"Table Batches are created successfully in the disk"<<std::endl;
     else
         std::cout<<"Error while creating table batches in the disk"<<std::endl;
 }
 
-bool Table::makeTableBatches(const std::vector<std::string>& projections) {
+bool Table::makeTableBatches(const std::vector<std::string>& projections, const std::vector<std::string>& conditions) {
     std::string dir_name = TABLE_PATH + table_name;
     if (!fs::exists(dir_name)) {
         fs::create_directory(dir_name);
@@ -25,15 +26,14 @@ bool Table::makeTableBatches(const std::vector<std::string>& projections) {
         if (entry.path().extension() == ".csv") {
             std::string filename = fs::path(entry.path()).stem().string();
             if (filename == table_name) {
-                return makeBatches(entry.path().string(), projections);
+                return makeBatches(entry.path().string(), projections, conditions);
             }
         }
     }
     return false;
 } 
 
-
-bool Table::makeBatches(const std::string& filepath, const std::vector<std::string>& projections) {
+bool Table::makeBatches(const std::string& filepath, const std::vector<std::string>& projections, const std::vector<std::string>& conditions) {
     std::ifstream file(filepath);
     if (!file.is_open()) {
         std::cerr << "Failed to open file: " << filepath << std::endl;
@@ -42,6 +42,7 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
 
     std::string line;
 
+    /****************** Getting Headers ******************/
     numColumns = projections.size();
     columnNames = new char*[numColumns];
     // Read header
@@ -66,17 +67,40 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
         }
     }
 
-    data = new char**[numColumns];
-    char*** data_temp = new char**[numColumns];
+    /****************** Initializing Memory ******************/
+    data = new void*[numColumns];
+    void** data_temp = new void*[numColumns];
     for (int i = 0; i < numColumns; ++i) {
-        data[i] = new char*[BATCH_SIZE];
-        data_temp[i] = new char*[BATCH_SIZE];
-        for (int j = 0; j < BATCH_SIZE; ++j) {
-            data[i][j] = nullptr;  // Initialize to null
-            data_temp[i][j] = nullptr;
+        std::string header = std::string(columnNames[i]);
+        if (header.find("(N)") != std::string::npos) {
+            float* colData = new float[BATCH_SIZE];
+            float* colTemp = new float[BATCH_SIZE];
+            data[i] = colData;
+            data_temp[i] = colTemp;
+        } 
+        else if (header.find("(T)") != std::string::npos) {
+            char** colData = new char*[BATCH_SIZE];
+            char** colTemp = new char*[BATCH_SIZE];
+            for (int j = 0; j < BATCH_SIZE; ++j) {
+                colData[j] = new char[MAX_VAR_CHAR + 1](); // zero-initialized
+                colTemp[j] = new char[MAX_VAR_CHAR + 1]();
+            }
+            data[i] = colData;
+            data_temp[i] = colTemp;
+        } 
+        else if (header.find("(D)") != std::string::npos) {
+            char** colData = new char*[BATCH_SIZE];
+            char** colTemp = new char*[BATCH_SIZE];
+            for (int j = 0; j < BATCH_SIZE; ++j) {
+                colData[j] = new char[MAX_DATETIME + 1]();
+                colTemp[j] = new char[MAX_DATETIME + 1]();
+            }
+            data[i] = colData;
+            data_temp[i] = colTemp;
         }
     }
 
+    /****************** Getting Data ******************/
     // Read rows
     int row = 0;
     int batch_idx = 0;
@@ -90,14 +114,28 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
             value.erase(value.find_last_not_of(" \r\n\t") + 1);
             if(target_indices[idx] == col)
             {
-                if (batch_idx==0) {
-                    data[idx][row] = new char[value.length() + 1];
-                    std::strcpy(data[idx][row], value.c_str());
-                }
-                else {
-                    data_temp[idx][row] = new char[value.length() + 1];
-                    std::strcpy(data_temp[idx][row], value.c_str());
-                }
+                std::string header = std::string(columnNames[idx]);
+                if (batch_idx == 0) {
+                    if (header.find("(N)") != std::string::npos) {
+                        float* colData = static_cast<float*>(data[idx]);
+                        colData[row] = std::stof(value);
+                    } 
+                    else if (header.find("(T)") != std::string::npos || header.find("(D)") != std::string::npos) {
+                        char** colData = static_cast<char**>(data[idx]);
+                        std::strncpy(colData[row], value.c_str(), header.find("(D)") != std::string::npos ? MAX_DATETIME : MAX_VAR_CHAR);
+                        colData[row][header.find("(D)") != std::string::npos ? MAX_DATETIME : MAX_VAR_CHAR] = '\0';  // Ensure null termination
+                    }
+                } else {
+                    if (header.find("(N)") != std::string::npos) {
+                        float* colTemp = static_cast<float*>(data_temp[idx]);
+                        colTemp[row] = std::stof(value);
+                    } 
+                    else if (header.find("(T)") != std::string::npos || header.find("(D)") != std::string::npos) {
+                        char** colTemp = static_cast<char**>(data_temp[idx]);
+                        std::strncpy(colTemp[row], value.c_str(), header.find("(D)") != std::string::npos ? MAX_DATETIME : MAX_VAR_CHAR);
+                        colTemp[row][header.find("(D)") != std::string::npos ? MAX_DATETIME : MAX_VAR_CHAR] = '\0';  // Ensure null termination
+                    }
+                }                
                 idx++;
             }
 
@@ -127,16 +165,27 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
     }
 
     if (data_temp) {
-        for (int col = 0; col < numColumns; ++col) {
-            if (data_temp[col]) {
-                for (int row = 0; row < BATCH_SIZE; ++row) {
-                    delete[] data_temp[col][row];  // delete each cell
-                }
-                delete[] data_temp[col];  // delete column
+        for (int i = 0; i < numColumns; ++i) {
+            std::string header = std::string(columnNames[i]);
+        
+            if (header.find("(N)") != std::string::npos) {
+                delete[] static_cast<float*>(data_temp[i]);
+            } 
+            else if (header.find("(T)") != std::string::npos) {
+                char** colTemp = static_cast<char**>(data_temp[i]);
+                for (int j = 0; j < BATCH_SIZE; ++j)
+                    delete[] colTemp[j];
+                delete[] colTemp;
+            } 
+            else if (header.find("(D)") != std::string::npos) {
+                char** colTemp = static_cast<char**>(data_temp[i]);
+                for (int j = 0; j < BATCH_SIZE; ++j)
+                    delete[] colTemp[j];
+                delete[] colTemp;
             }
         }
-        delete[] data_temp;  
-        data_temp = nullptr;
+        delete[] data_temp;
+        data_temp = nullptr;  
     }
 
     file.close();
@@ -144,7 +193,7 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
     return true;
 }  
 
-bool Table::makeBatchFile(const int& batch_idx, char*** const &data_temp, const int& size) {
+bool Table::makeBatchFile(const int& batch_idx, void** const &data_temp, const int& size) {
     std::string folder_path = TABLE_PATH + table_name;
     std::string file_path = folder_path + "/BATCH" + std::to_string(batch_idx) + ".csv";
 
@@ -159,24 +208,39 @@ bool Table::makeBatchFile(const int& batch_idx, char*** const &data_temp, const 
         std::cerr << "MAKE BATCH: Failed to open file "<< file_path << std::endl;
         return false;
     }
-
+    
     if (batch_idx==0) {
-        for (int i = 0; i < size; ++i) {
-            for (int j = 0; j < numColumns; ++j) {
-                file << data[j][i];
-                if (j != numColumns-1) file << ",";
+        for (int row = 0; row < BATCH_SIZE; ++row) {
+            for (int col = 0; col < numColumns; ++col) {
+                std::string header = std::string(columnNames[col]);
+                if (header.find("(N)") != std::string::npos) {
+                    file << std::fixed << std::setprecision(FLOAT_PRECISION) << ((float*)data[col])[row];
+                } 
+                else if (header.find("(T)") != std::string::npos || header.find("(D)") != std::string::npos) {
+                    file << ((char**)data[col])[row];
+                }
+                if (col != numColumns - 1)
+                    file << ",";
             }
             file << "\n";
-        }
+        }  
     }
     else {
-        for (int i = 0; i < size; ++i) {
-            for (int j = 0; j < numColumns; ++j) {
-                file << data_temp[j][i];
-                if (j != numColumns-1) file << ",";
+        for (int row = 0; row < BATCH_SIZE; ++row) {
+            for (int col = 0; col < numColumns; ++col) {
+                std::string header = std::string(columnNames[col]);
+        
+                if (header.find("(N)") != std::string::npos) {
+                    file << std::fixed << std::setprecision(FLOAT_PRECISION) << ((float*)data_temp[col])[row];
+                } 
+                else if (header.find("(T)") != std::string::npos || header.find("(D)") != std::string::npos) {
+                    file << ((char**)data_temp[col])[row];
+                }
+                if (col != numColumns - 1)
+                    file << ",";
             }
             file << "\n";
-        }
+        }  
     }
     return true;
 }
@@ -187,7 +251,7 @@ bool Table::getTableBatch(const int& batch_idx) {
 
     std::ifstream file(file_path);
     if (!file.is_open()) {
-        std::cerr << "GET BATCH: Failed to open file "<< file_path << std::endl;
+        std::cerr << "GET BATCH: Failed to open file " << file_path << std::endl;
         return false;
     }
 
@@ -198,18 +262,29 @@ bool Table::getTableBatch(const int& batch_idx) {
         std::string value;
         int col = 0;
         while (std::getline(ss, value, ',')) {
-            value.erase(value.find_last_not_of(" \r\n\t") + 1);
-            data[col][row] = new char[value.length() + 1];
-            std::strcpy(data[col][row], value.c_str());
+            value.erase(value.find_last_not_of(" \r\n\t") + 1); 
+            std::string header = std::string(columnNames[col]);
+            if (header.find("(N)") != std::string::npos) {
+                ((float*)data[col])[row] = std::stof(value);
+            } 
+            else if (header.find("(T)") != std::string::npos) {
+                std::strncpy(((char**)data[col])[row], value.c_str(), MAX_VAR_CHAR); 
+                ((char**)data[col])[row][MAX_VAR_CHAR] = '\0'; 
+            }
+            else if(header.find("(D)") != std::string::npos) {
+                std::strncpy(((char**)data[col])[row], value.c_str(), MAX_DATETIME); 
+                ((char**)data[col])[row][MAX_DATETIME] = '\0';
+            }
+
             col++;
         }
         row++;
     }
 
     file.close();
-
     return true;
 }
+
 
 int Table::getNumColumns() {
     return numColumns;
@@ -223,7 +298,7 @@ char** Table::getColumnNames() {
     return columnNames;
 }
 
-char*** Table::getData() {
+void** Table::getData() {
     return data;
 }
 
@@ -232,7 +307,7 @@ void Table::printData() {
         std::cout << "No data to print.\n";
         return;
     }
-    std::cout << "--------- Printing Data for Table: "<<table_name<<"---------"<<std::endl;
+    std::cout << "--------- Printing Data for Table: " << table_name << " ---------" << std::endl;
     // Print header
     for (int col = 0; col < numColumns; ++col) {
         std::cout << columnNames[col];
@@ -241,11 +316,16 @@ void Table::printData() {
     std::cout << std::endl;
 
     // Print rows
-    for (int row = 0; row < HEAD; ++row) {
+    for (int row = 0; row < HEAD && row < numRows; ++row) {
         for (int col = 0; col < numColumns; ++col) {
-            if (data[col][row]) {
-                std::cout << data[col][row];
-            } else {
+            std::string header = columnNames[col];
+            if (header.find("(N)") != std::string::npos) {
+                std::cout << ((float*)data[col])[row];
+            } 
+            else if (header.find("(T)") != std::string::npos || header.find("(D)") != std::string::npos) {
+                std::cout << ((char**)data[col])[row];
+            } 
+            else {
                 std::cout << "NULL";
             }
 
@@ -255,87 +335,31 @@ void Table::printData() {
     }
 }
 
-bool Table::readCSVColumns_DUCK(const std::string& filepath, const std::vector<std::string>& projections) {
-    // Step 1: Allocate memory for the data buffer
-    if (numRows == 0) {
-        numColumns = projections.size();
-        columnNames = new char*[numColumns];
-        
-        for(int i=0; i<numColumns; i++) {
-            columnNames[i] = new char[projections[i].length() + 1];
-            std::strcpy(columnNames[i], projections[i].c_str());
-        }
-
-        data = new char**[numColumns];
-        for (int i = 0; i < numColumns; ++i) {
-            data[i] = new char*[BATCH_SIZE];
-            for (int j = 0; j < BATCH_SIZE; ++j) {
-                data[i][j] = nullptr;
-            }
-        }
-
-    } else {
-        for (int i = 0; i < numColumns; ++i) {
-            for (int j = 0; j < BATCH_SIZE; ++j) {
-                data[i][j] = nullptr;
-            }
-        }
-    }
-
-    // Step 2: Set up in-memory DuckDB and build query
-    duckdb::DuckDB db(nullptr); // in-memory DB
-    duckdb::Connection con(db);
-
-    std::string select_clause = "SELECT ";
-    for (size_t i = 0; i < numColumns; ++i) {
-        select_clause += "\"" + projections[i] + "\""; // handle spaces/special chars
-        if (i < numColumns - 1) {
-            select_clause += ", ";
-        }
-    }
-    std::string query = select_clause + " FROM '" + filepath + "'";
-
-    auto result = con.Query(query);
-    //std::cout<<query<<std::endl;
-    if (!result || result->HasError()) {
-        std::cerr << "Query error: " << result->GetError() << std::endl;
-        return false;
-    }
-
-    // Step 3: Read and store results
-    size_t row_index = 0;
-    while (auto chunk = result->Fetch()) {
-        for (size_t i = 0; i < chunk->size(); i++) {
-            for (size_t col = 0; col < numColumns; ++col) {
-                std::string val = chunk->GetValue(col, i).ToString();
-                data[col][row_index] = new char[val.length() + 1];
-                std::strcpy(data[col][row_index], val.c_str());
-            }
-            row_index++;
-            if (row_index >= BATCH_SIZE) break;
-        }
-        if (row_index >= BATCH_SIZE) break;
-    }
-
-    numRows += row_index;
-
-    return true;
-}
-
 
 Table::~Table() {
     // Delete data
     if (data) {
-        for (int col = 0; col < numColumns; ++col) {
-            if (data[col]) {
-                for (int row = 0; row < BATCH_SIZE; ++row) {
-                    delete[] data[col][row];  // delete each cell
-                }
-                delete[] data[col];  // delete column
+        for (int i = 0; i < numColumns; ++i) {
+            std::string header = std::string(columnNames[i]);
+        
+            if (header.find("(N)") != std::string::npos) {
+                delete[] static_cast<float*>(data[i]);
+            } 
+            else if (header.find("(T)") != std::string::npos) {
+                char** colTemp = static_cast<char**>(data[i]);
+                for (int j = 0; j < BATCH_SIZE; ++j)
+                    delete[] colTemp[j];
+                delete[] colTemp;
+            } 
+            else if (header.find("(D)") != std::string::npos) {
+                char** colTemp = static_cast<char**>(data[i]);
+                for (int j = 0; j < BATCH_SIZE; ++j)
+                    delete[] colTemp[j];
+                delete[] colTemp;
             }
         }
-        delete[] data;  
-        data = nullptr;
+        delete[] data;
+        data = nullptr;  
     }
 
     // Delete column names
@@ -350,3 +374,72 @@ Table::~Table() {
     numColumns = 0;
     numRows = 0;
 }
+
+
+
+// bool Table::readCSVColumns_DUCK(const std::string& filepath, const std::vector<std::string>& projections) {
+//     // Step 1: Allocate memory for the data buffer
+//     if (numRows == 0) {
+//         numColumns = projections.size();
+//         columnNames = new char*[numColumns];
+        
+//         for(int i=0; i<numColumns; i++) {
+//             columnNames[i] = new char[projections[i].length() + 1];
+//             std::strcpy(columnNames[i], projections[i].c_str());
+//         }
+
+//         data = new char**[numColumns];
+//         for (int i = 0; i < numColumns; ++i) {
+//             data[i] = new char*[BATCH_SIZE];
+//             for (int j = 0; j < BATCH_SIZE; ++j) {
+//                 data[i][j] = nullptr;
+//             }
+//         }
+
+//     } else {
+//         for (int i = 0; i < numColumns; ++i) {
+//             for (int j = 0; j < BATCH_SIZE; ++j) {
+//                 data[i][j] = nullptr;
+//             }
+//         }
+//     }
+
+//     // Step 2: Set up in-memory DuckDB and build query
+//     duckdb::DuckDB db(nullptr); // in-memory DB
+//     duckdb::Connection con(db);
+
+//     std::string select_clause = "SELECT ";
+//     for (size_t i = 0; i < numColumns; ++i) {
+//         select_clause += "\"" + projections[i] + "\""; // handle spaces/special chars
+//         if (i < numColumns - 1) {
+//             select_clause += ", ";
+//         }
+//     }
+//     std::string query = select_clause + " FROM '" + filepath + "'";
+
+//     auto result = con.Query(query);
+//     //std::cout<<query<<std::endl;
+//     if (!result || result->HasError()) {
+//         std::cerr << "Query error: " << result->GetError() << std::endl;
+//         return false;
+//     }
+
+//     // Step 3: Read and store results
+//     size_t row_index = 0;
+//     while (auto chunk = result->Fetch()) {
+//         for (size_t i = 0; i < chunk->size(); i++) {
+//             for (size_t col = 0; col < numColumns; ++col) {
+//                 std::string val = chunk->GetValue(col, i).ToString();
+//                 data[col][row_index] = new char[val.length() + 1];
+//                 std::strcpy(data[col][row_index], val.c_str());
+//             }
+//             row_index++;
+//             if (row_index >= BATCH_SIZE) break;
+//         }
+//         if (row_index >= BATCH_SIZE) break;
+//     }
+
+//     numRows += row_index;
+
+//     return true;
+// }s
