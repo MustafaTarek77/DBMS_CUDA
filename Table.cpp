@@ -9,15 +9,15 @@
 
 namespace fs = std::filesystem;
 
-Table::Table(const std::string &table_name, const std::vector<std::string>& projections, const std::vector<std::string>& conditions) {
+Table::Table(const std::string &table_name, const std::vector<std::string>& projections, const std::vector<std::string>& target_columns, const std::vector<Condition>& conditions) {
     this->table_name = table_name;
-    if(makeTableBatches(projections, conditions))
+    if(makeTableBatches(projections, target_columns, conditions))
         std::cout<<"Table Batches are created successfully in the disk"<<std::endl;
     else
         std::cout<<"Error while creating table batches in the disk"<<std::endl;
 }
 
-bool Table::makeTableBatches(const std::vector<std::string>& projections, const std::vector<std::string>& conditions) {
+bool Table::makeTableBatches(const std::vector<std::string>& projections, const std::vector<std::string>& target_columns, const std::vector<Condition>& conditions) {
     std::string dir_name = TABLE_PATH + table_name;
     if (!fs::exists(dir_name)) {
         fs::create_directory(dir_name);
@@ -26,14 +26,14 @@ bool Table::makeTableBatches(const std::vector<std::string>& projections, const 
         if (entry.path().extension() == ".csv") {
             std::string filename = fs::path(entry.path()).stem().string();
             if (filename == table_name) {
-                return makeBatches(entry.path().string(), projections, conditions);
+                return makeBatches(entry.path().string(), projections, target_columns, conditions);
             }
         }
     }
     return false;
 } 
 
-bool Table::makeBatches(const std::string& filepath, const std::vector<std::string>& projections, const std::vector<std::string>& conditions) {
+bool Table::makeBatches(const std::string& filepath, const std::vector<std::string>& projections, const std::vector<std::string>& target_columns, const std::vector<Condition>& conditions) {
     std::ifstream file(filepath);
     if (!file.is_open()) {
         std::cerr << "Failed to open file: " << filepath << std::endl;

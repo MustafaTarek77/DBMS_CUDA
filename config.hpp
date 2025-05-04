@@ -1,3 +1,5 @@
+#pragma once
+
 #define BATCH_SIZE 10000
 #define MAX_VAR_CHAR 255
 #define MAX_DATETIME 19 //yyyy-MM-dd HH:mm:ss
