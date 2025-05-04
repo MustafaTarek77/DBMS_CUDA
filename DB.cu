@@ -20,6 +20,8 @@
 #include <sstream>
 #include <filesystem>
 #include <iostream>
+#include <memory>
+#include <regex>
 
 namespace fs = std::filesystem;
 using namespace duckdb;
@@ -28,7 +30,7 @@ DuckDBManager::DuckDBManager(const std::string &csv_directory)
     : csv_directory(csv_directory), db(std::make_unique<DuckDB>(nullptr)), con(std::make_unique<Connection>(*db)) {}
 
 void DuckDBManager::InitializeDatabase() {
-    con->Query("SET disabled_optimizers = 'filter_pushdown,statistics_propagation';");
+    con->Query("SET disabled_optimizers = 'filter_pushdown, statistics_propagation';");
     // Collect all table names
     for (const auto &entry : fs::directory_iterator(csv_directory)) {
         if (entry.path().extension() == ".csv") {
@@ -167,79 +169,146 @@ void DuckDBManager::AnalyzeQuery(const std::string &query) {
     
     std::cout << physical_plan.get()->Root().ToString() << std::endl;   
     TraversePlan(&physical_plan.get()->Root());
+    ExecutePlan();
 }
 
 void DuckDBManager::TraversePlan(PhysicalOperator *op) {
     for (auto &child : op->children) {
         TraversePlan(&child.get());
     }
-    switch(op->type) {
-        case PhysicalOperatorType::TABLE_SCAN: {            
-            auto params = op->ParamsToString();
-            std::string table_name;
-            std::vector<std::string> target_columns;
-            for(auto &param: params)
-            {
-                if(param.first=="Table") {
-                    std::cout<<"Scanning Table: "<<param.second<<std::endl;
-                    table_name = param.second;
+    execution_plan.push_back(op);
+}
+
+void DuckDBManager::ExecutePlan() {
+    for(int i=0; i<execution_plan.size(); i++) {
+        switch(execution_plan[i]->type) {
+            case PhysicalOperatorType::TABLE_SCAN: {            
+                auto params = execution_plan[i]->ParamsToString();
+                std::string table_name;
+                std::vector<std::string> projections, target_columns;
+                std::vector<Condition> conditions;
+
+                // Getting table name and initial projections
+                for(auto &param: params)
+                {
+                    if(param.first=="Table") {
+                        std::cout<<"Scanning Table:- "<<param.second<<std::endl;
+                        table_name = param.second;
+                    }
+                    else if(param.first=="Projections") {
+                        std::cout << "Projections: ";
+                        std::istringstream iss(param.second);
+                        std::string projection;
+                        while (std::getline(iss, projection)) {
+                            if (!projection.empty()) {
+                                std::cout << projection << " ";
+                                projections.push_back(projection);
+                            }
+                        }
+                        std::cout << std::endl;
+                    }
                 }
-                else if(param.first=="Projections") {
-                    std::cout << "Projections: ";
-                    std::istringstream iss(param.second);
-                    std::string projection;
-                    while (std::getline(iss, projection)) {
-                        if (!projection.empty()) {
-                            std::cout << projection << " ";
-                            target_columns.push_back(projection);
+
+                // Getting Conditions if exist
+                if(i+1<execution_plan.size() && execution_plan[i+1]->type==PhysicalOperatorType::FILTER) {
+                    auto params = execution_plan[i+1]->ParamsToString();
+                    std::cout << "Filters:-"<<std::endl;
+                    std::regex condition_pattern(R"(\(([^()]+)\))");
+                    std::regex expression_pattern(R"((\S+)\s*(=|!=|<|>)\s*(\S+))");
+
+                    for (auto &param : params) {
+                        std::string filter_string = param.second;
+                    
+                        std::smatch condition_match;
+                        auto start = filter_string.cbegin();
+                        auto end = filter_string.cend();
+                    
+                        while (std::regex_search(start, end, condition_match, condition_pattern)) {
+                            std::string condition_str = condition_match[1];
+                            std::cout << "Condition string: " << condition_str << std::endl;
+                        
+                            std::smatch expr_match;
+                            if (std::regex_match(condition_str, expr_match, expression_pattern)) {
+                                Condition condition;
+                                condition.left_operand = expr_match[1];
+                                condition.relational_operator = expr_match[2];
+                                condition.right_operand = expr_match[3];
+                                conditions.push_back(condition);
+                            }
+                        
+                            // Advance start to the end of the current match
+                            start = condition_match.suffix().first;
                         }
                     }
-                    std::cout << std::endl;
+                    i++;
+                    // Getting Projections if exist
+                    if(i+1<execution_plan.size() && execution_plan[i+1]->type==PhysicalOperatorType::PROJECTION) {
+                        auto params = execution_plan[i+1]->ParamsToString();
+                        std::cout << "Projecting expressions:- ";
+                        for(auto &param: params) {
+                            std::istringstream iss(param.second);
+                            std::string projection;
+                            while (std::getline(iss, projection)) {
+                                if (!projection.empty() && projection[0]=='#') {
+                                    std::string proj = projection.substr(1);
+                                    std::cout << projections[std::stoi(proj)] << " ";
+                                    target_columns.push_back(projections[std::stoi(proj)]);
+                                }
+                            }
+                        }
+                        std::cout << std::endl;
+                        i++;
+                    }
                 }
+
+                Table new_table(table_name, projections, target_columns, conditions);
+                last_table_scanned_h.table_name = table_name;
+                last_table_scanned_h.columns_projections = target_columns;
+                last_table_scanned_h.conditions = conditions;
+                last_table_scanned_h.data = new_table.getData();
+                std::cout<<"Table is scanned successfully"<<std::endl;
+                break;
             }
-            Table new_table(table_name, target_columns);
-            last_table_scanned_h.table_name = table_name;
-            last_table_scanned_h.columns_projections = target_columns;
-            last_table_scanned_h.data = new_table.getData();
-            std::cout<<"Table is scanned successfully"<<std::endl;
-            break;
-        }
-        case PhysicalOperatorType::FILTER: {
-            auto &filter = op->Cast<PhysicalFilter>();
-            std::cout << "Applying Filter: " << filter.expression->ToString() << std::endl;
-            break;
-        }
-        case PhysicalOperatorType::PROJECTION: {
-            auto &proj = op->Cast<PhysicalProjection>();
-            std::cout << "Projecting expressions: ";
-            for (auto &expr : proj.select_list) {
-                std::cout << expr->ToString() << " ";
+            case PhysicalOperatorType::FILTER: {
+                auto params = execution_plan[i]->ParamsToString();
+                for(auto &param: params)
+                {
+                    std::cout<<"Applying Filter:- "<<param.second<<std::endl;
+                }
+                break;
             }
-            std::cout << std::endl;
-            break;
-        }
-        case PhysicalOperatorType::HASH_JOIN: {
-            auto &join = op->Cast<PhysicalHashJoin>();
-            std::cout << "Hash Join on condition: " << join.conditions[0].left->ToString() 
-                      << " = " << join.conditions[0].right->ToString() << std::endl;
-            break;
-        }
-        case PhysicalOperatorType::CROSS_PRODUCT: {
-            std::cout << "Cross Product." << std::endl;
-            break;
-        }
-        case PhysicalOperatorType::ORDER_BY: {
-            auto &order = op->Cast<PhysicalOrder>();
-            std::cout << "Ordering by: ";
-            for (auto &expr : order.orders) {
-                std::cout << expr.expression->ToString() << " ";
-                std::cout << (expr.type == OrderType::ASCENDING ? "ASC" : "DESC") << " ";
+            case PhysicalOperatorType::PROJECTION: {
+                //auto &proj = execution_plan[i]->Cast<PhysicalProjection>();
+                std::cout << "Projecting hhh:- ";
+                // for (auto &expr : proj.select_list) {
+                //     std::cout << expr->ToString() << " ";
+                // }
+                std::cout << std::endl;
+                break;
             }
-            std::cout << std::endl;
-            break;
+            case PhysicalOperatorType::HASH_JOIN: {
+                // auto &join = v->Cast<PhysicalHashJoin>();
+                // std::cout << "Hash Join on condition:- " << join.conditions[0].left->ToString() 
+                //           << " = " << join.conditions[0].right->ToString() << std::endl;
+                break;
+            }
+            case PhysicalOperatorType::CROSS_PRODUCT: {
+                std::cout << "Cross Product:-" << std::endl;
+                break;
+            }
+            case PhysicalOperatorType::ORDER_BY: {
+                // auto &order = op->Cast<PhysicalOrder>();
+                std::cout << "Ordering by:- ";
+                // for (auto &expr : order.orders) {
+                //     std::cout << expr.expression->ToString() << " ";
+                //     std::cout << (expr.type == OrderType::ASCENDING ? "ASC" : "DESC") << " ";
+                // }
+                std::cout << std::endl;
+                break;
+            }
+            default:
+                std::cout << "Unhandeled Operator encountered:- " << PhysicalOperatorToString(execution_plan[i]->type) << std::endl;
+                break;
         }
-        default:
-            std::cout << "Other Physical Operator encountered: " << PhysicalOperatorToString(op->type) << std::endl;
-            break;
     }
 }

@@ -18,14 +18,15 @@ int main() {
     db_manager.InitializeDatabase();
     db_manager.LoadTablesFromCSV();
 
-    std::string query = "SELECT s.name, s.age, a.address FROM Students s, Addresses a WHERE s.age>20 and s.year>1+1";
+    std::string query = "SELECT s.name, s.age, a.address FROM Students s, Addresses a WHERE (s.age>20 AND s.year>1+1) OR s.name='Alice Smith'";
     db_manager.AnalyzeQuery(query);
 
     // std::string table_name = "test";
    
-    // std::vector<std::string> projections = {"ratio(N)", "score(N)", "name(T)", "date_created(D)"};  // <-- CHOOSE YOUR COLUMNS
+    // std::vector<std::string> projections = {"ratio", "score", "name", "date_created"}; 
+    // std::vector<std::string> conditions = {};
 
-    // Table t(table_name, projections);
+    // Table t(table_name, projections, conditions);
     // t.printData();
 
     // if (t.getTableBatch(7))
