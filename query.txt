@@ -1,1 +1,1 @@
-SELECT s.name, s.age FROM Students s WHERE s.age>20 and s.year>1+1 or s.student_id < 3 and s.year>3;
+SELECT name FROM test;
