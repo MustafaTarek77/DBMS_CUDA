@@ -21,7 +21,6 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
-#include <regex>
 
 namespace fs = std::filesystem;
 using namespace duckdb;
@@ -182,11 +181,13 @@ void DuckDBManager::TraversePlan(PhysicalOperator *op) {
 void DuckDBManager::ExecutePlan() {
     for(int i=0; i<execution_plan.size(); i++) {
         switch(execution_plan[i]->type) {
-            case PhysicalOperatorType::TABLE_SCAN: {            
+            case PhysicalOperatorType::TABLE_SCAN: {
+                deleteLastTableScanned(); 
+
                 auto params = execution_plan[i]->ParamsToString();
                 std::string table_name;
                 std::vector<std::string> projections, target_columns;
-                std::vector<Condition> conditions;
+                std::vector<std::vector<Condition>> conditions;
 
                 // Getting table name and initial projections
                 for(auto &param: params)
@@ -208,36 +209,18 @@ void DuckDBManager::ExecutePlan() {
                         std::cout << std::endl;
                     }
                 }
-
+                
                 // Getting Conditions if exist
                 if(i+1<execution_plan.size() && execution_plan[i+1]->type==PhysicalOperatorType::FILTER) {
                     auto params = execution_plan[i+1]->ParamsToString();
-                    std::cout << "Filters:-"<<std::endl;
-                    std::regex condition_pattern(R"(\(([^()]+)\))");
-                    std::regex expression_pattern(R"((\S+)\s*(=|!=|<|>)\s*(\S+))");
-
+                    std::cout << "Filters:-" << std::endl;
+                
                     for (auto &param : params) {
-                        std::string filter_string = param.second;
-                    
-                        std::smatch condition_match;
-                        auto start = filter_string.cbegin();
-                        auto end = filter_string.cend();
-                    
-                        while (std::regex_search(start, end, condition_match, condition_pattern)) {
-                            std::string condition_str = condition_match[1];
-                            std::cout << "Condition string: " << condition_str << std::endl;
-                        
-                            std::smatch expr_match;
-                            if (std::regex_match(condition_str, expr_match, expression_pattern)) {
-                                Condition condition;
-                                condition.left_operand = expr_match[1];
-                                condition.relational_operator = expr_match[2];
-                                condition.right_operand = expr_match[3];
-                                conditions.push_back(condition);
-                            }
-                        
-                            // Advance start to the end of the current match
-                            start = condition_match.suffix().first;
+                        if (param.first=="__expression__") {
+                            std::string filter_str = param.second;
+                            std::cout << "Processing filter string: "<< filter_str << std::endl;
+                            parseComplexExpression(filter_str, conditions);
+                            // printConditionStructure(conditions);
                         }
                     }
                     i++;
@@ -260,12 +243,16 @@ void DuckDBManager::ExecutePlan() {
                         i++;
                     }
                 }
-
                 Table new_table(table_name, projections, target_columns, conditions);
                 last_table_scanned_h.table_name = table_name;
-                last_table_scanned_h.columns_projections = target_columns;
+                last_table_scanned_h.projections = projections;
                 last_table_scanned_h.conditions = conditions;
                 last_table_scanned_h.data = new_table.getData();
+                last_table_scanned_h.columnNames = new_table.getColumnNames();
+                last_table_scanned_h.numColumns = new_table.getNumColumns();
+                last_table_scanned_h.numRows = new_table.getNumRows();
+                last_table_scanned_h.numBatches = new_table.getNumBatches();
+                new_table.printData();
                 std::cout<<"Table is scanned successfully"<<std::endl;
                 break;
             }
@@ -292,6 +279,48 @@ void DuckDBManager::ExecutePlan() {
                 //           << " = " << join.conditions[0].right->ToString() << std::endl;
                 break;
             }
+            case PhysicalOperatorType::UNGROUPED_AGGREGATE: {
+                auto params = execution_plan[i]->ParamsToString();
+                std::cout << "Applying Aggregation:-" << std::endl;
+                
+                std::vector<std::string> agg_functions;
+                std::vector<std::string> agg_targets;
+                
+                for (auto &param : params) {
+                    if (param.first == "Aggregates") {
+                        std::cout << "Aggregate Functions: " << std::endl;
+
+                        std::istringstream iss(param.second);
+                        std::string agg_expr;
+                        while (std::getline(iss, agg_expr)) {
+                            if (!agg_expr.empty()) {
+                                size_t openParen = agg_expr.find('(');
+                            size_t closeParen = agg_expr.find(')');
+
+                            if (openParen == std::string::npos || closeParen == std::string::npos || agg_expr[openParen + 1] != '#') {
+                                std::cerr << "Invalid aggregate format: " << agg_expr << std::endl;
+                                continue;
+                            }
+
+                            std::string function = agg_expr.substr(0, openParen); 
+                            std::string columnIndex = agg_expr.substr(openParen + 2, closeParen - openParen - 2); 
+
+                            agg_functions.push_back(function);
+                            agg_targets.push_back(columnIndex);
+
+                            std::cout << "  Function: " << function << ", Column Index: " << columnIndex << std::endl;
+                            if (function == "max") {
+                                int columnIdx = std::stoi(columnIndex);
+                                std::cout << "Applying MAX on column index " << columnIdx << std::endl;
+                                
+                                ExecuteMaxAggregate(columnIdx);
+                            }
+                            }
+                        }
+                    }
+                }
+                break;
+            }
             case PhysicalOperatorType::CROSS_PRODUCT: {
                 std::cout << "Cross Product:-" << std::endl;
                 break;
@@ -311,4 +340,162 @@ void DuckDBManager::ExecutePlan() {
                 break;
         }
     }
+}
+
+void DuckDBManager::ExecuteMaxAggregate(int columnIdx) {
+
+    if (last_table_scanned_h.table_name.empty() || !last_table_scanned_h.data) {
+        std::cerr << "No table data available for aggregation" << std::endl;
+        return;
+    }
+    std::cout <<last_table_scanned_h.table_name<<std::endl;
+    // Get column data from the last scanned table
+    void** tableData = last_table_scanned_h.data;
+    if (!tableData) {
+        std::cerr << "Table data is null" << std::endl;
+        return;
+    }
+    // Check if column index is valid
+    if (columnIdx < 0 || columnIdx >= last_table_scanned_h.projections.size()) {
+        std::cerr << "Invalid column index for aggregation: " << columnIdx << std::endl;
+        return;
+    }
+
+    // Get the column data (assuming it's a float column)
+    float* columnData = static_cast<float*>(tableData[columnIdx]);
+
+    // DEBUG: Print tableData pointer and its first few elements
+    std::cout << "columnData pointer: " << columnData << std::endl;
+    for (int i = 0; i < 5; i++) {
+        if (columnData[i]) {
+            std::cout << "columnData[" << i << "]: " << columnData[i] << std::endl;
+        } else {
+            std::cout << "columnData[" << i << "]: NULL" << std::endl;
+        }
+    }
+
+    if (!columnData) {
+        std::cerr << "Column data is null" << std::endl;
+        return;
+    }
+    
+    // Allocate memory on device
+    float* d_data = nullptr;
+    float* d_block_max = nullptr;
+    float* d_final_max = nullptr;
+    
+    // CUDA event timers
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    float gpu_time = 0.0f;
+    
+    // // Allocate device memory
+    // cudaMalloc((void**)&d_data, numRows * sizeof(float));
+    
+    // int threadsPerBlock = BLOCK_SIZE;
+    // int blocksPerGrid = (numRows + threadsPerBlock - 1) / threadsPerBlock;
+    
+    // cudaMalloc((void**)&d_block_max, blocksPerGrid * sizeof(float));
+    // cudaMalloc((void**)&d_final_max, sizeof(float));
+    
+    // // Copy data to device
+    // cudaMemcpy(d_data, columnData, numRows * sizeof(float), cudaMemcpyHostToDevice);
+    
+    // cudaEventRecord(start, 0);
+    
+    // // First pass: Find max for each block
+    // findWarpMax<<<blocksPerGrid, threadsPerBlock>>>(d_data, d_block_max, numRows);
+    
+    // // Calculate grid and block config for final reduction
+    // int threadsForFinalPass = (blocksPerGrid < BLOCK_SIZE) ? blocksPerGrid : BLOCK_SIZE;
+    // int blocksForFinalPass = (blocksPerGrid + threadsForFinalPass - 1) / threadsForFinalPass;
+    
+    // // Use multi-level reduction if needed
+    // float* d_intermediate_results = nullptr;
+    
+    // if (blocksForFinalPass == 1) {
+    //     // Single block final pass
+    //     findWarpMax<<<1, threadsForFinalPass>>>(d_block_max, d_final_max, blocksPerGrid);
+    // } else {
+    //     // Multi-level reduction
+    //     cudaMalloc((void**)&d_intermediate_results, blocksForFinalPass * sizeof(float));
+        
+    //     // Reduce block maxima to intermediate results
+    //     findWarpMax<<<blocksForFinalPass, threadsForFinalPass>>>(d_block_max, d_intermediate_results, blocksPerGrid);
+        
+    //     // Reduce intermediate results to final max
+    //     int finalThreads = (blocksForFinalPass < BLOCK_SIZE) ? blocksForFinalPass : BLOCK_SIZE;
+    //     findWarpMax<<<1, finalThreads>>>(d_intermediate_results, d_final_max, blocksForFinalPass);
+    // }
+    
+    // // Get result from device
+    // float max_result;
+    // cudaMemcpy(&max_result, d_final_max, sizeof(float), cudaMemcpyDeviceToHost);
+    
+    // cudaEventRecord(stop, 0);
+    // cudaEventSynchronize(stop);
+    // cudaEventElapsedTime(&gpu_time, start, stop);
+    
+    // std::cout << "MAX result: " << max_result << " (GPU time: " << gpu_time << " ms)" << std::endl;
+    
+    // // Clean up
+    // cudaFree(d_data);
+    // cudaFree(d_block_max);
+    // cudaFree(d_final_max);
+    // if (d_intermediate_results != nullptr) {
+    //     cudaFree(d_intermediate_results);
+    // }
+    
+    // cudaEventDestroy(start);
+    // cudaEventDestroy(stop);
+    
+    // // Check for CUDA errors
+    // cudaError_t err = cudaGetLastError();
+    // if (err != cudaSuccess) {
+    //     std::cerr << "CUDA Error: " << cudaGetErrorString(err) << std::endl;
+    // }
+}
+
+void DuckDBManager::deleteLastTableScanned() {
+    // Delete data
+    if (last_table_scanned_h.data) {
+        for (int i = 0; i < last_table_scanned_h.numColumns; ++i) {
+            std::string header = std::string(last_table_scanned_h.columnNames[i]);
+        
+            if (header.find("(N)") != std::string::npos) {
+                delete[] static_cast<float*>(last_table_scanned_h.data[i]);
+            } 
+            else if (header.find("(T)") != std::string::npos) {
+                char** colTemp = static_cast<char**>(last_table_scanned_h.data[i]);
+                for (int j = 0; j < BATCH_SIZE; ++j)
+                    delete[] colTemp[j];
+                delete[] colTemp;
+            } 
+            else if (header.find("(D)") != std::string::npos) {
+                char** colTemp = static_cast<char**>(last_table_scanned_h.data[i]);
+                for (int j = 0; j < BATCH_SIZE; ++j)
+                    delete[] colTemp[j];
+                delete[] colTemp;
+            }
+        }
+        delete[] last_table_scanned_h.data;
+        last_table_scanned_h.data = nullptr;  
+    }
+
+    // Delete column names
+    if (last_table_scanned_h.columnNames) {
+        for (int col = 0; col < last_table_scanned_h.numColumns; ++col) {
+            delete[] last_table_scanned_h.columnNames[col];
+        }
+        delete[] last_table_scanned_h.columnNames;
+        last_table_scanned_h.columnNames = nullptr;
+    }
+
+    last_table_scanned_h.numColumns = 0;
+    last_table_scanned_h.numRows = 0;
+}
+
+DuckDBManager::~DuckDBManager() {
+    deleteLastTableScanned();
 }

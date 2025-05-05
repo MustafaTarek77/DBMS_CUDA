@@ -10,15 +10,30 @@
 #include "Table.hpp"
 #include <filesystem>
 
-namespace fs = std::filesystem;
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <filename>\n";
+        return 1;
+    }
 
-int main() {
+    std::string filename = argv[1];
+    std::ifstream file(filename);
+    if (!file) {
+        std::cerr << "Error: Could not open file " << filename << "\n";
+        return 1;
+    }
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();  // Read entire file contents into buffer
+    std::string query = buffer.str();
+
+    std::cout << "Query read from file:\n" << query << "\n";
+
     DuckDBManager db_manager("./Data");
 
     db_manager.InitializeDatabase();
     db_manager.LoadTablesFromCSV();
 
-    std::string query = "SELECT s.name, s.age, a.address FROM Students s, Addresses a WHERE (s.age>20 AND s.year>1+1) OR s.name='Alice Smith'";
     db_manager.AnalyzeQuery(query);
 
     // std::string table_name = "test";
