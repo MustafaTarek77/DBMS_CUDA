@@ -16,10 +16,14 @@ struct ColumnInfo {
 };
 
 struct LastTableScanned {
-    void** data;
-    std::vector<std::string> columns_projections;
-    std::vector<Condition> conditions;
+    void** data = nullptr;
+    char** columnNames = nullptr;
+    std::vector<std::string> projections;
+    std::vector<std::vector<Condition>> conditions;
     std::string table_name;
+    int numColumns = 0;
+    long long numRows = 0;
+    int numBatches = 0;
 };
 
 class DuckDBManager {
@@ -39,9 +43,12 @@ private:
     std::string ConstructCreateTableQuery(const std::vector<ColumnInfo> &columns, const std::string &table_name);
     void TraversePlan(duckdb::PhysicalOperator *op);
     void ExecutePlan();
+    void deleteLastTableScanned();
+    void ExecuteMaxAggregate(int columnIdx);
 public:
     DuckDBManager(const std::string &csv_directory);
     void InitializeDatabase();
     void LoadTablesFromCSV();
     void AnalyzeQuery(const std::string &query);
+    ~DuckDBManager();
 };
