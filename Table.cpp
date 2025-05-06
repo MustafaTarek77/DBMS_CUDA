@@ -12,6 +12,95 @@
 
 namespace fs = std::filesystem;
 
+bool Table::checkConditions(const std::vector<std::vector<Condition>>& conditions, const std::string& row) {
+    if (conditions.empty()) {
+        return true;
+    }
+
+    std::stringstream ss(row);
+    std::string value;
+    int col = 0;
+    int idx = 0;
+    std::unordered_map<std::string, std::string> rowData;
+
+    // Step 1: Parse row values and store relevant ones in a map
+    while (std::getline(ss, value, ',')) {
+        value.erase(value.find_last_not_of(" \r\n\t") + 1);
+
+        if (projection_indices[idx] == col) {
+            std::string header = std::string(headers[idx]);
+            std::string colName = header.substr(0, header.find("("));
+            rowData[colName] = value;
+            idx++;
+        }
+
+        if (idx == numHeaders)
+            break;
+
+        col++;
+    }
+
+    // Step 2: Evaluate each group (OR between groups)
+    int groupIdx = 0;
+    for (const auto& group : conditions) {
+        bool groupResult = true;
+
+        // Step 3: Evaluate each condition in the group (AND within group)
+        for (const auto& cond : group) {
+            auto it = rowData.find(cond.left_operand);
+            if (it == rowData.end()) {
+                groupResult = false;
+                break;
+            }
+
+            const std::string& leftVal = it->second;
+            std::string headerType;
+            bool foundHeader = false;
+
+            for (int i = 0; i < numHeaders; i++) {
+                std::string colName = headers[i];
+                std::string baseColName = colName.substr(0, colName.find("("));
+                if (baseColName == cond.left_operand) {
+                    headerType = colName;
+                    foundHeader = true;
+                    break;
+                }
+            }
+
+            if (!foundHeader) {
+                groupResult = false;
+                break;
+            }
+
+            bool conditionResult = false;
+            if (headerType.find("(N)") != std::string::npos) {
+                conditionResult = compareFloats(std::stof(leftVal), cond.relational_operator, std::stof(cond.right_operand));
+            }
+            else if (headerType.find("(T)") != std::string::npos) {
+                conditionResult = compareStrings(leftVal, cond.relational_operator, cond.right_operand);
+            }
+            else if (headerType.find("(D)") != std::string::npos) {
+                conditionResult = compareDateTime(leftVal, cond.relational_operator, cond.right_operand);
+            } else {
+                groupResult = false;
+                break;
+            }
+
+            if (!conditionResult) {
+                groupResult = false;
+                break;
+            }
+        }
+
+        if (groupResult) {
+            return true; // OR between groups — return if any group is satisfied
+        } 
+        groupIdx++;
+    }
+
+    return false;
+}
+
 Table::Table(const std::string &table_name, const std::vector<std::string>& projections, const std::vector<std::string>& target_columns, const std::vector<std::vector<Condition>>& conditions) {
     this->table_name = table_name;
     if(makeTableBatches(projections, target_columns, conditions))
@@ -45,35 +134,33 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
 
     std::string line;
 
-    int group_num = 1;
-    for (const auto& group : conditions) {
-        std::cout << "Group " << group_num++ << ":\n";
-        for (const auto& cond : group) {
-            std::cout << "  " << cond.left_operand << " "
-                      << cond.relational_operator << " "
-                      << cond.right_operand << "\n";
-        }
-    }
-
     /****************** Getting Headers ******************/
-    numColumns = projections.size();
+    numHeaders = projections.size();
+    headers = new char*[numHeaders];
+    numColumns = target_columns.size();
     columnNames = new char*[numColumns];
     // Read header
     if (std::getline(file, line)) {
         std::string header;
         std::stringstream ssParse(line);
         int col = 0;
-        int idx = 0;
+        int headers_idx = 0, columns_idx=0;
 
         while (std::getline(ssParse, header, ',')) {
             header.erase(header.find_last_not_of(" \r\n\t") + 1);
-            for(int i=0; i<numColumns; i++) {
+            for(int i=0; i<numHeaders; i++) {
                 std::string temp = header.substr(0, header.find("("));
                 if(projections[i] == temp){
-                    columnNames[idx] = new char[header.length() + 1];
-                    std::strcpy(columnNames[idx], header.c_str());
+                    headers[headers_idx] = new char[header.length() + 1];
+                    std::strcpy(headers[headers_idx], header.c_str());
+                    projection_indices.push_back(col);
+                    headers_idx++;
+                }
+                if (i<numColumns && target_columns[i] == temp) {
+                    columnNames[columns_idx] = new char[header.length() + 1];
+                    std::strcpy(columnNames[columns_idx], header.c_str());
                     target_indices.push_back(col);
-                    idx++;
+                    columns_idx++;
                 }
             }
             ++col;
@@ -88,8 +175,8 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
         if (header.find("(N)") != std::string::npos) {
             float* colData = new float[BATCH_SIZE];
             float* colTemp = new float[BATCH_SIZE];
-            data[i] = colData;
-            data_temp[i] = colTemp;
+            data[i] = static_cast<void*>(colData);
+            data_temp[i] = static_cast<void*>(colTemp);
         } 
         else if (header.find("(T)") != std::string::npos) {
             char** colData = new char*[BATCH_SIZE];
@@ -98,8 +185,8 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
                 colData[j] = new char[MAX_VAR_CHAR + 1](); // zero-initialized
                 colTemp[j] = new char[MAX_VAR_CHAR + 1]();
             }
-            data[i] = colData;
-            data_temp[i] = colTemp;
+            data[i] = static_cast<void*>(colData);
+            data_temp[i] = static_cast<void*>(colTemp);
         } 
         else if (header.find("(D)") != std::string::npos) {
             char** colData = new char*[BATCH_SIZE];
@@ -108,22 +195,24 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
                 colData[j] = new char[MAX_DATETIME + 1]();
                 colTemp[j] = new char[MAX_DATETIME + 1]();
             }
-            data[i] = colData;
-            data_temp[i] = colTemp;
+            data[i] = static_cast<void*>(colData);
+            data_temp[i] = static_cast<void*>(colTemp);
         }
     }
 
     /****************** Getting Data ******************/
     // Read rows
     int row = 0;
-    int batch_idx = 0;
     while (std::getline(file, line)) {
         std::stringstream ss(line);
         std::string value;
         int col = 0;
         int idx = 0;
-        bool is_filtered = false;
-        //check conditions
+
+        if (!checkConditions(conditions, line)) {
+            continue;
+        }
+        
         while (std::getline(ss, value, ',')) {
             value.erase(value.find_last_not_of(" \r\n\t") + 1);
             if(target_indices[idx] == col)
@@ -131,151 +220,29 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
                 std::string header = std::string(columnNames[idx]);
                 if (batch_idx == 0) {
                     if (header.find("(N)") != std::string::npos) {
-                        float* colData = static_cast<float*>(data[idx]);
                         float entry = std::stof(value); 
-                        colData[row] = entry; 
-                        //std::string key = header.substr(0, header.find("("));            
-                        // auto it = conditions.find(key);
-                        // if (it != conditions.end()) {
-                        //     const Condition& cond = it->second;
-                        
-                        //     std::string op = cond.relational_operator;
-                        //     float rhs = std::stof(cond.right_operand);
-                        
-                        //     if (compareFloats(entry, op, rhs)) {
-                        //         colData[row] = entry;
-                        //     }
-                        //     else {
-                        //         is_filtered = true;
-                        //     }
-                        // } 
-                        // else {
-                        //     colData[row] = entry;
-                        // }
+                        static_cast<float*>(data[idx])[row] = entry;
                     } 
                     else if (header.find("(T)") != std::string::npos) {
-                        char** colData = static_cast<char**>(data[idx]);
-                        std::strncpy(colData[row], value.c_str(), MAX_VAR_CHAR);
-                        colData[row][MAX_VAR_CHAR] = '\0';  // Ensure null termination
-                        // std::string key = header.substr(0, header.find("("));
-                        // auto it = conditions.find(key);
-                        // if (it != conditions.end()) {
-                        //     const Condition& cond = it->second;
-                        
-                        //     std::string op = cond.relational_operator;
-                        //     std::string rhs = cond.right_operand;
-                        
-                        //     if (compareStrings(value, op, rhs)) {
-                        //         std::strncpy(colData[row], value.c_str(), MAX_VAR_CHAR);
-                        //         colData[row][MAX_VAR_CHAR] = '\0';  // Ensure null termination
-                        //     }
-                        //     else {
-                        //         is_filtered = true;
-                        //     }
-                        // } 
-                        // else {
-                        //     std::strncpy(colData[row], value.c_str(), MAX_VAR_CHAR);
-                        //     colData[row][MAX_VAR_CHAR] = '\0';  // Ensure null termination
-                        // }
+                        std::strncpy(static_cast<char**>(data[idx])[row], value.c_str(), MAX_VAR_CHAR);
+                        static_cast<char**>(data[idx])[row][MAX_VAR_CHAR] = '\0';  // Ensure null termination
                     }
                     else if (header.find("(D)") != std::string::npos) {
-                        char** colData = static_cast<char**>(data[idx]);
-                        std::strncpy(colData[row], value.c_str(), MAX_DATETIME);
-                        colData[row][MAX_VAR_CHAR] = '\0';  // Ensure null termination
-                        //std::string key = header.substr(0, header.find("("));
-                        // auto it = conditions.find(key);
-                        // if (it != conditions.end()) {
-                        //     const Condition& cond = it->second;
-                        
-                        //     std::string op = cond.relational_operator;
-                        //     std::string rhs = cond.right_operand;
-                        
-                        //     if (compareDateTime(value, op, rhs)) {
-                        //         std::strncpy(colData[row], value.c_str(), MAX_DATETIME);
-                        //         colData[row][MAX_VAR_CHAR] = '\0';  // Ensure null termination
-                        //     }
-                        //     else {
-                        //         is_filtered = true;
-                        //     }
-                        // } 
-                        // else {
-                        //     std::strncpy(colData[row], value.c_str(), MAX_DATETIME);
-                        //     colData[row][MAX_VAR_CHAR] = '\0';  // Ensure null termination
-                        // }
+                        std::strncpy(static_cast<char**>(data[idx])[row], value.c_str(), MAX_DATETIME);
+                        static_cast<char**>(data[idx])[row][MAX_DATETIME] = '\0';  // Ensure null termination
                     }
                 } else {
                     if (header.find("(N)") != std::string::npos) {
-                        float* colData = static_cast<float*>(data[idx]);
                         float entry = std::stof(value);  
-                        colData[row] = entry;
-                        //std::string key = header.substr(0, header.find("("));            
-                        // auto it = conditions.find(key);
-                        // if (it != conditions.end()) {
-                        //     const Condition& cond = it->second;
-                        
-                        //     std::string op = cond.relational_operator;
-                        //     float rhs = std::stof(cond.right_operand);
-                        
-                        //     if (compareFloats(entry, op, rhs)) {
-                        //         colData[row] = entry;
-                        //     }
-                        //     else {
-                        //         is_filtered = true;
-                        //     }
-                        // } 
-                        // else {
-                        //     colData[row] = entry;
-                        // }
+                        static_cast<float*>(data_temp[idx])[row] = entry;
                     } 
                     else if (header.find("(T)") != std::string::npos) {
-                        char** colData = static_cast<char**>(data[idx]);
-                        std::strncpy(colData[row], value.c_str(), MAX_VAR_CHAR);
-                        colData[row][MAX_VAR_CHAR] = '\0';  // Ensure null termination
-                        // std::string key = header.substr(0, header.find("("));
-                        // auto it = conditions.find(key);
-                        // if (it != conditions.end()) {
-                        //     const Condition& cond = it->second;
-                        
-                        //     std::string op = cond.relational_operator;
-                        //     std::string rhs = cond.right_operand;
-                        
-                        //     if (compareStrings(value, op, rhs)) {
-                        //         std::strncpy(colData[row], value.c_str(), MAX_VAR_CHAR);
-                        //         colData[row][MAX_VAR_CHAR] = '\0';  // Ensure null termination
-                        //     }
-                        //     else {
-                        //         is_filtered = true;
-                        //     }
-                        // } 
-                        // else {
-                        //     std::strncpy(colData[row], value.c_str(), MAX_VAR_CHAR);
-                        //     colData[row][MAX_VAR_CHAR] = '\0';  // Ensure null termination
-                        // }
+                        std::strncpy(static_cast<char**>(data_temp[idx])[row], value.c_str(), MAX_VAR_CHAR);
+                        static_cast<char**>(data_temp[idx])[row][MAX_VAR_CHAR] = '\0';  // Ensure null termination
                     }
                     else if (header.find("(D)") != std::string::npos) {
-                        char** colData = static_cast<char**>(data[idx]);
-                        std::strncpy(colData[row], value.c_str(), MAX_DATETIME);
-                        colData[row][MAX_VAR_CHAR] = '\0';  // Ensure null termination
-                        // std::string key = header.substr(0, header.find("("));
-                        // auto it = conditions.find(key);
-                        // if (it != conditions.end()) {
-                        //     const Condition& cond = it->second;
-                        
-                        //     std::string op = cond.relational_operator;
-                        //     std::string rhs = cond.right_operand;
-                        
-                        //     if (compareDateTime(value, op, rhs)) {
-                        //         std::strncpy(colData[row], value.c_str(), MAX_DATETIME);
-                        //         colData[row][MAX_VAR_CHAR] = '\0';  // Ensure null termination
-                        //     }
-                        //     else {
-                        //         is_filtered = true;
-                        //     }
-                        // } 
-                        // else {
-                        //     std::strncpy(colData[row], value.c_str(), MAX_DATETIME);
-                        //     colData[row][MAX_VAR_CHAR] = '\0';  // Ensure null termination
-                        // }
+                        std::strncpy(static_cast<char**>(data_temp[idx])[row], value.c_str(), MAX_DATETIME);
+                        static_cast<char**>(data_temp[idx])[row][MAX_DATETIME] = '\0';  // Ensure null termination
                     }
                 }                
                 idx++;
@@ -286,11 +253,9 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
 
             col++;
         }
-        if (!is_filtered) {
-            row++;
-        }
+        row++;
         if (row == BATCH_SIZE ) {
-            if (!makeBatchFile(batch_idx, data_temp, BATCH_SIZE))
+            if (!makeBatchFile(data_temp, BATCH_SIZE))
                 return false;
 
             numRows+=row;
@@ -300,7 +265,7 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
     }
 
     if (row != 0 ) {
-        if (!makeBatchFile(batch_idx, data_temp, row))
+        if (!makeBatchFile(data_temp, row))
             return false;
         
         numRows+=row;
@@ -337,7 +302,7 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
     return true;
 }  
 
-bool Table::makeBatchFile(const int& batch_idx, void** const &data_temp, const int& size) {
+bool Table::makeBatchFile(void** const &data_temp, const int& size) {
     std::string folder_path = TABLE_PATH + table_name;
     std::string file_path = folder_path + "/BATCH" + std::to_string(batch_idx) + ".csv";
 
@@ -354,7 +319,7 @@ bool Table::makeBatchFile(const int& batch_idx, void** const &data_temp, const i
     }
     
     if (batch_idx==0) {
-        for (int row = 0; row < BATCH_SIZE; ++row) {
+        for (int row = 0; row < size; ++row) {
             for (int col = 0; col < numColumns; ++col) {
                 std::string header = std::string(columnNames[col]);
                 if (header.find("(N)") != std::string::npos) {
@@ -370,7 +335,7 @@ bool Table::makeBatchFile(const int& batch_idx, void** const &data_temp, const i
         }  
     }
     else {
-        for (int row = 0; row < BATCH_SIZE; ++row) {
+        for (int row = 0; row < size; ++row) {
             for (int col = 0; col < numColumns; ++col) {
                 std::string header = std::string(columnNames[col]);
         
@@ -478,7 +443,7 @@ long long Table::getNumRows() {
 }
 
 int Table::getNumBatches() {
-    return std::ceil(numRows/BATCH_SIZE);
+    return batch_idx;
 }
 
 char** Table::getColumnNames() {

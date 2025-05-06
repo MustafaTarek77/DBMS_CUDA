@@ -7,16 +7,21 @@
 
 class Table {
 private:
-    char** columnNames = nullptr;
+    char** columnNames = nullptr; // target projections
+    char** headers = nullptr; // all projections
     void** data;
     int numColumns = 0;
+    int numHeaders = 0;
     long long numRows = 0;
+    int batch_idx = 0;
+    std::vector<int> projection_indices;
     std::vector<int> target_indices;
     std::string table_name;
 
     bool makeTableBatches(const std::vector<std::string>& projections, const std::vector<std::string>& target_columns, const std::vector<std::vector<Condition>>& conditions); // Distibute the whole table into batches and fill data with the first batch
     bool makeBatches(const std::string& filepath, const std::vector<std::string>& projections, const std::vector<std::string>& target_columns, const std::vector<std::vector<Condition>>& conditions);
-    bool makeBatchFile(const int& batch_idx, void** const &data_temp, const int& size);
+    bool makeBatchFile(void** const &data_temp, const int& size);
+    bool checkConditions(const std::vector<std::vector<Condition>>& conditions, const std::string& row);
     bool compareFloats(float lhs, const std::string& op, float rhs);
     bool compareStrings(const std::string& lhs, const std::string& op, const std::string& rhs);
     bool compareDateTime(const std::string& lhs, const std::string& op, const std::string& rhs);

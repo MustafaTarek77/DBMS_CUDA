@@ -155,11 +155,7 @@ void DuckDBManager::AnalyzeQuery(const std::string &query) {
     Optimizer optimizer(*planner.binder, ctx);
     auto logical_plan = optimizer.Optimize(std::move(planner.plan));
 
-    // Step 4: Output the logical plan as string
-    std::cout << "=== LOGICAL PLAN ===" << std::endl;
-    std::cout << logical_plan->ToString() << std::endl; 
-
-    // Step 5: Create physical plan
+    // Step 4: Create physical plan
     PhysicalPlanGenerator physical_generator(ctx);
     
     auto physical_plan = physical_generator.Plan(logical_plan->Copy(ctx));

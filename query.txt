@@ -1,1 +1,1 @@
-SELECT name FROM test;
+SELECT name, amount FROM test WHERE id>5;
