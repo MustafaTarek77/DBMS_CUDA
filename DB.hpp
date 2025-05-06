@@ -23,7 +23,7 @@ private:
     std::vector<std::string> table_names;
     std::vector<PhysicalOperator*> execution_plan;
 
-    LastTableScanned last_table_scanned_h;
+    Table* last_table_scanned_h = nullptr;
     void** last_op_input_d;
     void** last_op_output_d;
     void** output_h;

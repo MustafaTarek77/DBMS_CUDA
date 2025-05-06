@@ -251,9 +251,9 @@ void printConditionStructure(const std::vector<std::vector<Condition>>& conditio
     }
 }
 
-float ExecuteMinMaxFloat(int columnIdx, bool findMin, const LastTableScanned& last_table_scanned_h) {
+float ExecuteMinMaxFloat(int columnIdx, bool findMin, Table* last_table_scanned_h) {
     // Get the data for the specified column
-    void* columnData = last_table_scanned_h.data[columnIdx];
+    void* columnData = last_table_scanned_h->getData()[columnIdx];
     float* h_data = static_cast<float*>(columnData);
     size_t numRows = BATCH_SIZE;
     
@@ -348,11 +348,11 @@ float ExecuteMinMaxFloat(int columnIdx, bool findMin, const LastTableScanned& la
     return gpu_result;
 }
 
-long long ExecuteMinMaxDate(int columnIdx, bool findMin, const LastTableScanned& last_table_scanned_h) {
+long long ExecuteMinMaxDate(int columnIdx, bool findMin, Table* last_table_scanned_h) {
     // Get the data for the specified column
-    void* columnData = last_table_scanned_h.data[columnIdx];
+    void* columnData = last_table_scanned_h->getData()[columnIdx];
     char** dateStrings = static_cast<char**>(columnData);
-    size_t numRows = last_table_scanned_h.numRows;
+    size_t numRows = BATCH_SIZE;
     
     if (numRows == 0) {
         std::cout << "No data to process for " << (findMin ? "MIN" : "MAX") << " DATE operation" << std::endl;
@@ -441,9 +441,9 @@ long long ExecuteMinMaxDate(int columnIdx, bool findMin, const LastTableScanned&
     return gpu_result;
 }
 
-double ExecuteSumFloat(int columnIdx, const LastTableScanned& last_table_scanned_h) {
+double ExecuteSumFloat(int columnIdx, Table* last_table_scanned_h) {
     // Get the data for the specified column
-    void* columnData = last_table_scanned_h.data[columnIdx];
+    void* columnData = last_table_scanned_h->getData()[columnIdx];
     float* h_data = static_cast<float*>(columnData);
     size_t numRows = BATCH_SIZE;
     
@@ -506,9 +506,9 @@ double ExecuteSumFloat(int columnIdx, const LastTableScanned& last_table_scanned
     return gpu_sum;
 }
 
-unsigned int ExecuteCountString(int columnIdx, const LastTableScanned& last_table_scanned_h) {
+unsigned int ExecuteCountString(int columnIdx, Table* last_table_scanned_h) {
     // Get the data for the specified column
-    void* columnData = last_table_scanned_h.data[columnIdx];
+    void* columnData = last_table_scanned_h->getData()[columnIdx];
     char** stringData = static_cast<char**>(columnData);
     size_t numRows = BATCH_SIZE;
     
@@ -590,9 +590,9 @@ unsigned int ExecuteCountString(int columnIdx, const LastTableScanned& last_tabl
     return gpu_count;
 }
 
-unsigned int ExecuteCountFloat(int columnIdx, const LastTableScanned& last_table_scanned_h) {
+unsigned int ExecuteCountFloat(int columnIdx, Table* last_table_scanned_h) {
     // Get the data for the specified column
-    void* columnData = last_table_scanned_h.data[columnIdx];
+    void* columnData = last_table_scanned_h->getData()[columnIdx];
     float* floatData = static_cast<float*>(columnData);
     size_t numRows = BATCH_SIZE;
     
@@ -657,14 +657,14 @@ unsigned int ExecuteCountFloat(int columnIdx, const LastTableScanned& last_table
 }
 
 
-void ExecuteAggregateFunction(const std::string& function, int columnIdx, const LastTableScanned& last_table_scanned_h) {
-    if (columnIdx >= last_table_scanned_h.numColumns) {
+void ExecuteAggregateFunction(const std::string& function, int columnIdx, Table* last_table_scanned_h) {
+    if (columnIdx >= last_table_scanned_h->getNumColumns()) {
         std::cerr << "Error: Column index " << columnIdx << " out of bounds" << std::endl;
         return;
     }
     
     // Get column name and type
-    std::string columnName = last_table_scanned_h.columnNames[columnIdx];
+    std::string columnName = last_table_scanned_h->getColumnNames()[columnIdx];
     std::string columnType;
     
     // Extract column type from column name

@@ -206,6 +206,7 @@ void DuckDBManager::ExecutePlan() {
                         std::cout << std::endl;
                     }
                 }
+                target_columns = projections;
                 
                 // Getting Conditions if exist
                 if(i+1<execution_plan.size() && execution_plan[i+1]->type==PhysicalOperatorType::FILTER) {
@@ -225,6 +226,7 @@ void DuckDBManager::ExecutePlan() {
 
                 // Getting Projections if exist
                 if(i+1<execution_plan.size() && execution_plan[i+1]->type==PhysicalOperatorType::PROJECTION) {
+                    target_columns.clear();
                     auto params = execution_plan[i+1]->ParamsToString();
                     std::cout << "Projecting expressions:- ";
                     for(auto &param: params) {
@@ -251,16 +253,8 @@ void DuckDBManager::ExecutePlan() {
                     i++;
                 }
 
-                Table new_table(table_name, projections, target_columns, conditions);
-                last_table_scanned_h.table_name = table_name;
-                last_table_scanned_h.projections = target_columns;
-                last_table_scanned_h.conditions = conditions;
-                last_table_scanned_h.data = new_table.getData();
-                last_table_scanned_h.columnNames = new_table.getColumnNames();
-                last_table_scanned_h.numColumns = new_table.getNumColumns();
-                last_table_scanned_h.numRows = new_table.getNumRows();
-                last_table_scanned_h.numBatches = new_table.getNumBatches();
-                new_table.printData();
+                last_table_scanned_h = new Table(table_name, projections, target_columns, conditions);
+                last_table_scanned_h->printData();
                 std::cout<<"Table is scanned successfully"<<std::endl;
                 break;
             }
@@ -348,42 +342,8 @@ void DuckDBManager::ExecutePlan() {
 }
 
 void DuckDBManager::deleteLastTableScanned() {
-    // Delete data
-    if (last_table_scanned_h.data) {
-        for (int i = 0; i < last_table_scanned_h.numColumns; ++i) {
-            std::string header = std::string(last_table_scanned_h.columnNames[i]);
-        
-            if (header.find("(N)") != std::string::npos) {
-                delete[] static_cast<float*>(last_table_scanned_h.data[i]);
-            } 
-            else if (header.find("(T)") != std::string::npos) {
-                char** colTemp = static_cast<char**>(last_table_scanned_h.data[i]);
-                for (int j = 0; j < BATCH_SIZE; ++j)
-                    delete[] colTemp[j];
-                delete[] colTemp;
-            } 
-            else if (header.find("(D)") != std::string::npos) {
-                char** colTemp = static_cast<char**>(last_table_scanned_h.data[i]);
-                for (int j = 0; j < BATCH_SIZE; ++j)
-                    delete[] colTemp[j];
-                delete[] colTemp;
-            }
-        }
-        delete[] last_table_scanned_h.data;
-        last_table_scanned_h.data = nullptr;  
-    }
-
-    // Delete column names
-    if (last_table_scanned_h.columnNames) {
-        for (int col = 0; col < last_table_scanned_h.numColumns; ++col) {
-            delete[] last_table_scanned_h.columnNames[col];
-        }
-        delete[] last_table_scanned_h.columnNames;
-        last_table_scanned_h.columnNames = nullptr;
-    }
-
-    last_table_scanned_h.numColumns = 0;
-    last_table_scanned_h.numRows = 0;
+    delete last_table_scanned_h;
+    last_table_scanned_h = nullptr; 
 }
 
 DuckDBManager::~DuckDBManager() {
