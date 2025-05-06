@@ -9,6 +9,9 @@
 #include "./DB.hpp"
 #include "Table.hpp"
 #include <filesystem>
+#include "config.hpp"
+
+namespace fs = std::filesystem;
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
@@ -29,7 +32,10 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Query read from file:\n" << query << "\n";
 
-    DuckDBManager db_manager("./Data");
+    fs::remove_all(TABLE_PATH);
+    fs::create_directory(TABLE_PATH);
+
+    DuckDBManager db_manager(FOLDER_PATH);
 
     db_manager.InitializeDatabase();
     db_manager.LoadTablesFromCSV();
