@@ -13,7 +13,7 @@ private:
     int numColumns = 0;
     int numHeaders = 0;
     long long numRows = 0;
-    int batch_idx = 0;
+    int numBatches = 0;
     std::vector<int> projection_indices;
     std::vector<int> target_indices;
     std::string table_name;
@@ -35,5 +35,5 @@ public:
     void** getData();
     char** getColumnNames();
     void printData();
-    // ~Table();
+    ~Table();
 };
