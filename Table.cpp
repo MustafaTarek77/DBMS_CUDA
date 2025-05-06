@@ -26,7 +26,7 @@ bool Table::checkConditions(const std::vector<std::vector<Condition>>& condition
     // Step 1: Parse row values and store relevant ones in a map
     while (std::getline(ss, value, ',')) {
         value.erase(value.find_last_not_of(" \r\n\t") + 1);
-
+        
         if (projection_indices[idx] == col) {
             std::string header = std::string(headers[idx]);
             std::string colName = header.substr(0, header.find("("));
@@ -74,7 +74,11 @@ bool Table::checkConditions(const std::vector<std::vector<Condition>>& condition
 
             bool conditionResult = false;
             if (headerType.find("(N)") != std::string::npos) {
-                conditionResult = compareFloats(std::stof(leftVal), cond.relational_operator, std::stof(cond.right_operand));
+                float entry = std::numeric_limits<float>::quiet_NaN();
+                if (leftVal != "\"\"" && !leftVal.empty()) {
+                    entry = std::stof(leftVal); 
+                }
+                conditionResult = compareFloats(entry, cond.relational_operator, std::stof(cond.right_operand));
             }
             else if (headerType.find("(T)") != std::string::npos) {
                 conditionResult = compareStrings(leftVal, cond.relational_operator, cond.right_operand);
@@ -175,6 +179,10 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
         if (header.find("(N)") != std::string::npos) {
             float* colData = new float[BATCH_SIZE];
             float* colTemp = new float[BATCH_SIZE];
+            for (int j = 0; j < BATCH_SIZE; ++j) {
+                colData[j] = std::numeric_limits<float>::quiet_NaN(); // zero-initialized
+                colTemp[j] = std::numeric_limits<float>::quiet_NaN();
+            }
             data[i] = static_cast<void*>(colData);
             data_temp[i] = static_cast<void*>(colTemp);
         } 
@@ -220,7 +228,10 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
                 std::string header = std::string(columnNames[idx]);
                 if (batch_idx == 0) {
                     if (header.find("(N)") != std::string::npos) {
-                        float entry = std::stof(value); 
+                        float entry = std::numeric_limits<float>::quiet_NaN();
+                        if (value != "\"\"" && !value.empty()) {
+                            entry = std::stof(value); 
+                        }
                         static_cast<float*>(data[idx])[row] = entry;
                     } 
                     else if (header.find("(T)") != std::string::npos) {
@@ -233,7 +244,10 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
                     }
                 } else {
                     if (header.find("(N)") != std::string::npos) {
-                        float entry = std::stof(value);  
+                        float entry = std::numeric_limits<float>::quiet_NaN();
+                        if (value != "\"\"" && !value.empty()) {
+                            entry = std::stof(value); 
+                        }
                         static_cast<float*>(data_temp[idx])[row] = entry;
                     } 
                     else if (header.find("(T)") != std::string::npos) {

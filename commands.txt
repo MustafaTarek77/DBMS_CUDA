@@ -1,5 +1,5 @@
 Compile:-
-nvcc main.cu DB.cu Table.cpp utils.cpp -o main -I/home/mustafa-tarek/Desktop/PC/duckdb/src/include -L/home/mustafa-tarek/Desktop/PC/duckdb/build/release/src -lduckdb -std=c++17 -Wno-deprecated-gpu-targets
+nvcc main.cpp DB.cpp Table.cpp db_utils.cu kernels.cu -o main -I/home/mustafa-tarek/Desktop/PC/duckdb/src/include -L/home/mustafa-tarek/Desktop/PC/duckdb/build/release/src -lduckdb -std=c++17 -Wno-deprecated-gpu-targets
 
 Adding Library Path:-
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/mustafa-tarek/Desktop/PC/duckdb/build/release/src
