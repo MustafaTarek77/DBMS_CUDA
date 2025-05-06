@@ -15,17 +15,6 @@ struct ColumnInfo {
     bool is_foreign_key;
 };
 
-struct LastTableScanned {
-    void** data = nullptr;
-    char** columnNames = nullptr;
-    std::vector<std::string> projections;
-    std::vector<std::vector<Condition>> conditions;
-    std::string table_name;
-    int numColumns = 0;
-    long long numRows = 0;
-    int numBatches = 0;
-};
-
 class DuckDBManager {
 private:
     std::string csv_directory;
@@ -44,7 +33,6 @@ private:
     void TraversePlan(duckdb::PhysicalOperator *op);
     void ExecutePlan();
     void deleteLastTableScanned();
-    void ExecuteMaxAggregate(int columnIdx);
 public:
     DuckDBManager(const std::string &csv_directory);
     void InitializeDatabase();
