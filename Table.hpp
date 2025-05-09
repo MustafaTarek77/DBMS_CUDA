@@ -7,16 +7,17 @@
 
 class Table {
 private:
+    std::string FOLDER_PATH;
+    std::string table_name;
     char** columnNames = nullptr; // target projections
     char** headers = nullptr; // all projections
     void** data;
-    int numColumns = 0;
     int numHeaders = 0;
-    long long numRows = 0;
+    int numColumns = 0;
+    int numRows = 0;
     int numBatches = 0;
     std::vector<int> projection_indices;
     std::vector<int> target_indices;
-    std::string table_name;
 
     bool makeTableBatches(const std::vector<std::string>& projections, const std::vector<std::string>& target_columns, const std::vector<std::vector<Condition>>& conditions); // Distibute the whole table into batches and fill data with the first batch
     bool makeBatches(const std::string& filepath, const std::vector<std::string>& projections, const std::vector<std::string>& target_columns, const std::vector<std::vector<Condition>>& conditions);
@@ -27,13 +28,17 @@ private:
     bool compareDateTime(const std::string& lhs, const std::string& op, const std::string& rhs);
     //bool readCSVColumns_DUCK(const std::string& filepath, const std::vector<std::string>& projections);
 public:
-    Table(const std::string &table_name, const std::vector<std::string>& projections, const std::vector<std::string>& target_columns, const std::vector<std::vector<Condition>>& conditions);
+    Table(std::string FOLDER_PATH, const std::string &table_name, const std::vector<std::string>& projections, const std::vector<std::string>& target_columns, const std::vector<std::vector<Condition>>& conditions);
+    Table(Table* table1, Table* table2, int* table1_indices, int* table2_indices, int total_rows, std::vector<std::string>& projections);
+    Table(Table* table);
     bool getTableBatch(const int& batch_idx);
+    std::string getTableName();
     int getNumColumns();
-    long long getNumRows();
+    int getNumRows();
     int getNumBatches();
     void** getData();
     char** getColumnNames();
     void printData();
+    void writeDataToFile(std::string filename);
     ~Table();
 };

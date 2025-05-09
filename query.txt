@@ -1,1 +1,1 @@
-SELECT COUNT(t.ratio) FROM test t;
+SELECT name, ratio from test ORDER BY ratio;
