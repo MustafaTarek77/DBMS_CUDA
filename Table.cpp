@@ -12,12 +12,243 @@
 
 namespace fs = std::filesystem;
 
-Table::Table(const std::string &table_name, const std::vector<std::string>& projections, const std::vector<std::string>& target_columns, const std::vector<std::vector<Condition>>& conditions) {
+Table::Table(std::string FOLDER_PATH, const std::string &table_name, const std::vector<std::string>& projections, const std::vector<std::string>& target_columns, const std::vector<std::vector<Condition>>& conditions) {
     this->table_name = table_name;
-    if(makeTableBatches(projections, target_columns, conditions))
-        std::cout<<"Table Batches are created successfully in the disk"<<std::endl;
-    else
-        std::cout<<"Error while creating table batches in the disk"<<std::endl;
+    this->FOLDER_PATH = FOLDER_PATH;
+    makeTableBatches(projections, target_columns, conditions);
+}
+
+Table::Table(Table* table1, Table* table2, int* table1_indices, int* table2_indices, int total_rows, std::vector<std::string>& projections) {
+    table_name = table1->getTableName() + "_" + table2->getTableName();
+
+    /****************** Getting Headers ******************/
+    int table1_cols = table1->getNumColumns();
+    int table2_cols = table2->getNumColumns();
+
+    numBatches = 1;
+    numColumns = projections.size();
+    numRows = total_rows;
+    columnNames = new char*[numColumns];
+
+    char** table1_cols_names = table1->getColumnNames();
+    char** table2_cols_names = table2->getColumnNames();
+
+    std::vector<bool> whichTable;
+
+    if (numColumns == table1_cols + table2_cols) {
+        int new_numColumns = 0;
+        for (int i = 0; i < numColumns; i++) {
+            if(projections[i]==" "){
+                continue;
+            }
+            bool found = false;
+        
+            for (int j = 0; j < table1_cols; j++) {
+                std::string header = std::string(table1_cols_names[j]);
+                std::string column = header.substr(0, header.find(" ("));
+                if (projections[i] == column) {
+                    columnNames[new_numColumns] = table1_cols_names[j];
+                    whichTable.push_back(false);
+                    found = true;
+                    new_numColumns++;
+                    for (int k = new_numColumns; k<numColumns; k++) {
+                        if(projections[k]==column){
+                            projections[k] = " ";
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        
+            if (!found) {
+                for (int j = 0; j < table2_cols; j++) {
+                    std::string header = std::string(table2_cols_names[j]);
+                    std::string column = header.substr(0, header.find(" ("));
+                    if (projections[i] == column) {
+                        columnNames[new_numColumns] = table2_cols_names[j];
+                        whichTable.push_back(true);
+                        found = true;
+                        new_numColumns++;
+                        break;
+                    }
+                }
+            }
+        
+            if (!found) {
+                std::cerr << "[ERROR] Column not found in either table: " << projections[i] << "\n";
+            }
+        }
+        numColumns = new_numColumns;
+    }
+    else {
+        for (int i = 0; i < numColumns; i++) {
+            bool found = false;
+
+            for (int j = 0; j < table1_cols; j++) {
+                std::string header = std::string(table1_cols_names[j]);
+                std::string column = header.substr(0, header.find(" ("));
+                if (projections[i] == column) {
+                    columnNames[i] = table1_cols_names[j];
+                    whichTable.push_back(false);
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                for (int j = 0; j < table2_cols; j++) {
+                    std::string header = std::string(table2_cols_names[j]);
+                    std::string column = header.substr(0, header.find(" ("));
+                    if (projections[i] == column) {
+                        columnNames[i] = table2_cols_names[j];
+                        whichTable.push_back(true);
+                        found = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!found) {
+                std::cerr << "[ERROR] Column not found in either table: " << projections[i] << "\n";
+            }
+        }
+    }
+
+    /****************** Initializing Memory ******************/
+    data = new void*[numColumns];
+    for (int i = 0; i < numColumns; ++i) {
+        std::string header = std::string(columnNames[i]);
+        if (header.find("(N)") != std::string::npos) {
+            float* colData = new float[numRows];
+            for (int j = 0; j < numRows; ++j) {
+                colData[j] = std::numeric_limits<float>::quiet_NaN();
+            }
+            data[i] = static_cast<void*>(colData);
+        } 
+        else if (header.find("(T)") != std::string::npos) {
+            char** colData = new char*[numRows];
+            for (int j = 0; j < numRows; ++j) {
+                colData[j] = new char[MAX_VAR_CHAR + 1]();
+            }
+            data[i] = static_cast<void*>(colData);
+        } 
+        else if (header.find("(D)") != std::string::npos) {
+            char** colData = new char*[numRows];
+            for (int j = 0; j < numRows; ++j) {
+                colData[j] = new char[MAX_DATETIME + 1]();
+            }
+            data[i] = static_cast<void*>(colData);
+        }
+    }
+
+    /****************** Getting Data ******************/
+    void** table1_data = table1->getData();
+    void** table2_data = table2->getData();
+
+    for (int row = 0; row < numRows; ++row) {
+        for (int idx = 0; idx < numColumns; ++idx) {
+            std::string header = columnNames[idx];
+            bool fromTable2 = whichTable[idx];
+
+            if (!fromTable2) {
+                for (int col = 0; col < table1_cols; ++col) {
+                    if (header == std::string(table1_cols_names[col])) {
+                        if (header.find("(N)") != std::string::npos) {
+                            static_cast<float*>(data[idx])[row] = static_cast<float*>(table1_data[col])[table1_indices[row]];
+                        } 
+                        else {
+                            std::strcpy(static_cast<char**>(data[idx])[row], static_cast<char**>(table1_data[col])[table1_indices[row]]);
+                        }
+                        break;
+                    }
+                }
+            } else {
+                for (int col = 0; col < table2_cols; ++col) {
+                    if (header == std::string(table2_cols_names[col])) {
+                        if (header.find("(N)") != std::string::npos) {
+                            static_cast<float*>(data[idx])[row] = static_cast<float*>(table2_data[col])[table2_indices[row]];
+                        } 
+                        else {
+                            std::strcpy(static_cast<char**>(data[idx])[row], static_cast<char**>(table2_data[col])[table2_indices[row]]);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // std::cout << "Joined table construction complete. Rows: " << numRows << ", Columns: " << numColumns << "\n";
+}
+
+Table::Table (Table* table) {
+    table_name = table->getTableName();
+
+    /****************** Getting Headers ******************/
+    int table_cols = table->getNumColumns();
+
+    numBatches = 1;
+    numColumns = table_cols;
+    numRows = table->getNumRows();
+    columnNames = new char*[numColumns];
+
+    char** table1_cols_names = table->getColumnNames();
+
+    for (int i = 0; i < numColumns; i++) {
+        columnNames[i] = table1_cols_names[i];
+    }
+    
+    /****************** Initializing Memory ******************/
+    data = new void*[numColumns];
+    for (int i = 0; i < numColumns; ++i) {
+        std::string header = std::string(columnNames[i]);
+        if (header.find("(N)") != std::string::npos) {
+            float* colData = new float[numRows];
+            for (int j = 0; j < numRows; ++j) {
+                colData[j] = std::numeric_limits<float>::quiet_NaN();
+            }
+            data[i] = static_cast<void*>(colData);
+        } 
+        else if (header.find("(T)") != std::string::npos) {
+            char** colData = new char*[numRows];
+            for (int j = 0; j < numRows; ++j) {
+                colData[j] = new char[MAX_VAR_CHAR + 1]();
+            }
+            data[i] = static_cast<void*>(colData);
+        } 
+        else if (header.find("(D)") != std::string::npos) {
+            char** colData = new char*[numRows];
+            for (int j = 0; j < numRows; ++j) {
+                colData[j] = new char[MAX_DATETIME + 1]();
+            }
+            data[i] = static_cast<void*>(colData);
+        }
+    }
+
+    /****************** Getting Data ******************/
+    int idx = 0;
+    for (int batch=0; batch<table->getNumBatches(); batch++) {
+        table->getTableBatch(batch);
+        void** batch_data = table->getData();
+        for (int row = 0; row < std::min(BATCH_SIZE, numRows-(batch*BATCH_SIZE)); ++row) {
+            for (int col = 0; col < numColumns; ++col) {
+                std::string header = columnNames[col];
+                if (header.find("(N)") != std::string::npos) {
+                    static_cast<float*>(data[col])[idx] = static_cast<float*>(batch_data[col])[row];
+                } 
+                else if (header.find("(T)") != std::string::npos) {
+                    std::strncpy(static_cast<char**>(data[col])[idx], static_cast<char**>(batch_data[col])[row], MAX_VAR_CHAR);
+                    static_cast<char**>(data[col])[idx][MAX_VAR_CHAR] = '\0';  // Ensure null termination
+                }
+                else if (header.find("(D)") != std::string::npos) {
+                    std::strncpy(static_cast<char**>(data[col])[idx], static_cast<char**>(batch_data[col])[row], MAX_DATETIME);
+                    static_cast<char**>(data[col])[idx][MAX_DATETIME] = '\0';  // Ensure null termination
+                }
+            }
+            idx++;
+        }
+    }
 }
 
 bool Table::makeTableBatches(const std::vector<std::string>& projections, const std::vector<std::string>& target_columns, const std::vector<std::vector<Condition>>& conditions) {
@@ -60,7 +291,7 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
         while (std::getline(ssParse, header, ',')) {
             header.erase(header.find_last_not_of(" \r\n\t") + 1);
             for(int i=0; i<numHeaders; i++) {
-                std::string temp = header.substr(0, header.find("("));
+                std::string temp = header.substr(0, header.find(" ("));
                 if(projections[i] == temp){
                     headers[headers_idx] = new char[header.length() + 1];
                     std::strcpy(headers[headers_idx], header.c_str());
@@ -197,7 +428,6 @@ bool Table::makeBatches(const std::string& filepath, const std::vector<std::stri
     if (data_temp) {
         for (int i = 0; i < numColumns; ++i) {
             std::string header = std::string(columnNames[i]);
-        
             if (header.find("(N)") != std::string::npos) {
                 delete[] static_cast<float*>(data_temp[i]);
             } 
@@ -259,7 +489,6 @@ bool Table::makeBatchFile(void** const &data_temp, const int& size) {
         for (int row = 0; row < size; ++row) {
             for (int col = 0; col < numColumns; ++col) {
                 std::string header = std::string(columnNames[col]);
-        
                 if (header.find("(N)") != std::string::npos) {
                     file << std::fixed << std::setprecision(FLOAT_PRECISION) << ((float*)data_temp[col])[row];
                 } 
@@ -333,7 +562,7 @@ bool Table::checkConditions(const std::vector<std::vector<Condition>>& condition
         
         if (projection_indices[idx] == col) {
             std::string header = std::string(headers[idx]);
-            std::string colName = header.substr(0, header.find("("));
+            std::string colName = header.substr(0, header.find(" ("));
             rowData[colName] = value;
             idx++;
         }
@@ -363,7 +592,7 @@ bool Table::checkConditions(const std::vector<std::vector<Condition>>& condition
 
             for (int i = 0; i < numHeaders; i++) {
                 std::string colName = headers[i];
-                std::string baseColName = colName.substr(0, colName.find("("));
+                std::string baseColName = colName.substr(0, colName.find(" ("));
                 if (baseColName == cond.left_operand) {
                     headerType = colName;
                     foundHeader = true;
@@ -425,15 +654,36 @@ bool Table::compareStrings(const std::string& lhs, const std::string& op, const 
     return false;
 }
 
-bool Table::compareDateTime(const std::string& lhs, const std::string& op, const std::string& rhs) {
+bool Table::compareDateTime(const std::string& lhs, const std::string& op, const std::string& rhs_raw) {
+    auto cleanTimestamp = [](std::string ts) -> std::string {
+        // Remove cast (e.g., ::TIMESTAMP)
+        size_t pos = ts.find("::");
+        if (pos != std::string::npos) {
+            ts = ts.substr(0, pos);
+        }
+
+        // Trim whitespace
+        ts = trim(ts);
+
+        // Remove surrounding quotes if present
+        if (!ts.empty() && ts.front() == '\'' && ts.back() == '\'') {
+            ts = ts.substr(1, ts.length() - 2);
+        }
+
+        return ts;
+    };
+
+    std::string lhs_clean = cleanTimestamp(lhs);
+    std::string rhs_clean = cleanTimestamp(rhs_raw);
+
     std::tm lhs_tm = {}, rhs_tm = {};
-    std::istringstream lhs_ss(lhs), rhs_ss(rhs);
+    std::istringstream lhs_ss(lhs_clean), rhs_ss(rhs_clean);
 
     lhs_ss >> std::get_time(&lhs_tm, "%Y-%m-%d %H:%M:%S");
     rhs_ss >> std::get_time(&rhs_tm, "%Y-%m-%d %H:%M:%S");
 
     if (lhs_ss.fail() || rhs_ss.fail()) {
-        std::cerr << "Invalid timestamp format." << std::endl;
+        std::cerr << "Invalid timestamp format: " << lhs_clean << " or " << rhs_clean << std::endl;
         return false;
     }
 
@@ -444,16 +694,22 @@ bool Table::compareDateTime(const std::string& lhs, const std::string& op, const
     if (op == "!=") return lhs_time != rhs_time;
     if (op == "<") return lhs_time < rhs_time;
     if (op == ">") return lhs_time > rhs_time;
-    
+    if (op == "<=") return lhs_time <= rhs_time;
+    if (op == ">=") return lhs_time >= rhs_time;
+
     std::cerr << "Unsupported operator for timestamps: " << op << std::endl;
     return false;
+}
+
+std::string Table::getTableName() {
+    return table_name;
 }
 
 int Table::getNumColumns() {
     return numColumns;
 }
 
-long long Table::getNumRows() {
+int Table::getNumRows() {
     return numRows;
 }
 
@@ -482,8 +738,16 @@ void Table::printData() {
     }
     std::cout << std::endl;
 
+    int rows = 0;
+    if(numRows>=BATCH_SIZE) {
+        rows = BATCH_SIZE;
+    }
+    else {
+        rows = numRows;
+    }
+
     // Print rows
-    for (int row = 0; row < HEAD && row < BATCH_SIZE; ++row) {
+    for (int row = 0; row < HEAD && row < rows; ++row) {
         for (int col = 0; col < numColumns; ++col) {
             std::string header = columnNames[col];
             if (header.find("(N)") != std::string::npos) {
@@ -502,13 +766,56 @@ void Table::printData() {
     }
 }
 
+void Table::writeDataToFile(std::string filename) {
+    if (!data || numColumns == 0 || numRows == 0) {
+        std::cout << "No data to write.\n";
+        return;
+    }
+
+    std::ofstream outFile(filename);
+    if (!outFile.is_open()) {
+        std::cerr << "Failed to open file: " << filename << std::endl;
+        return;
+    }
+
+    // Write header
+    for (int col = 0; col < numColumns; ++col) {
+        outFile << columnNames[col];
+        if (col < numColumns - 1) outFile << ", ";
+    }
+    outFile << "\n";
+
+    int rows = (numRows >= BATCH_SIZE) ? BATCH_SIZE : numRows;
+
+    // Write rows
+    for (int row = 0; row < rows; ++row) {
+        for (int col = 0; col < numColumns; ++col) {
+            std::string header = columnNames[col];
+            if (header.find("(N)") != std::string::npos) {
+                outFile << ((float*)data[col])[row];
+            } 
+            else if (header.find("(T)") != std::string::npos || header.find("(D)") != std::string::npos) {
+                outFile << ((char**)data[col])[row];
+            } 
+            else {
+                outFile << "NULL";
+            }
+
+            if (col < numColumns - 1) outFile << ", ";
+        }
+        outFile << "\n";
+    }
+
+    outFile.close();
+    //std::cout << "Data written to file: " << filename << std::endl;
+}
+
 
 Table::~Table() {
     // Delete data
     if (data) {
         for (int i = 0; i < numColumns; ++i) {
             std::string header = std::string(columnNames[i]);
-        
             if (header.find("(N)") != std::string::npos) {
                 delete[] static_cast<float*>(data[i]);
             } 
@@ -531,18 +838,12 @@ Table::~Table() {
 
     // Delete column names
     if (columnNames) {
-        for (int col = 0; col < numColumns; ++col) {
-            delete[] columnNames[col];
-        }
         delete[] columnNames;
         columnNames = nullptr;
     }
 
     // Delete column names
     if (headers) {
-        for (int col = 0; col < numHeaders; ++col) {
-            delete[] headers[col];
-        }
         delete[] headers;
         headers = nullptr;
     }

@@ -1,4 +1,4 @@
-id(N)(P),name(T),year(N),age(N)
+Students_id (N) (P),name (T),year (N),age (N)
 1,Alice Smith,3,19
 2,Bob Jones,4,22
 3,Carol White,3,21
